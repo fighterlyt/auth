@@ -24,7 +24,7 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		loginUrl := config.AuthCodeURL("mainweb")
+		loginUrl := config.AuthCodeURL("usdtpay1")
 		w.Write([]byte(loginUrl))
 	})
 

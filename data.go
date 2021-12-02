@@ -32,6 +32,7 @@ type Client struct {
 	ID     string `gorm:"column:id;type:varchar(255)" json:"id"`
 	Secret string `gorm:"column:secret;type:varchar(255)" json:"secret"`
 	Domain string `gorm:"column:domain;type:varchar(255)" json:"domain"`
+	Remark string `gorm:"column:remark;type:varchar(255)" json:"remark"`
 	UserID string
 }
 
@@ -51,15 +52,30 @@ func (c *Client) GetUserID() string {
 	return c.UserID
 }
 
-func (d *Data) GetUser(ctx context.Context, username string, password string) error {
-	user := &Users{}
+func (d *Data) GetUser(ctx context.Context, username string, password string) (user *Users, err error) {
+	user = &Users{}
 
 	if err := d.db.Table(d.usersTableName).Where("username = ? and password = ?", username, password).First(user).Error; err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return user, nil
 
+}
+
+type ClientInfo struct {
+	Domain string `gorm:"column:domain;type:varchar(255)" json:"domain"`
+	Remark string `gorm:"column:remark;type:varchar(255)" json:"remark"`
+}
+
+func (d *Data) GetAllClient(ctx context.Context) ([]*ClientInfo, error) {
+	var infos []*ClientInfo
+
+	if err := d.db.Table(d.clientTableName).Select("domain", "remark").Find(&infos).Error; err != nil {
+		return nil, err
+	}
+
+	return infos, nil
 }
 
 func (d *Data) GetByID(ctx context.Context, id string) (oauth2.ClientInfo, error) {

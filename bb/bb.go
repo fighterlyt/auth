@@ -19,7 +19,7 @@ func main() {
 			AuthURL:  "http://localhost:8001/authorize",
 			TokenURL: "http://localhost:8001/token",
 		},
-		RedirectURL: "https://8836-91-73-17-193.ngrok.io/code",
+		RedirectURL: "http://localhost:9096/code",
 		Scopes:      []string{"all"},
 	}
 
@@ -29,9 +29,7 @@ func main() {
 	})
 
 	http.HandleFunc("/code", func(w http.ResponseWriter, r *http.Request) {
-
 		code := r.URL.Query().Get("code")
-
 		token, err := config.Exchange(r.Context(), code)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

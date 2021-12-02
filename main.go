@@ -3,7 +3,7 @@ package main
 import (
 	"auth/session"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,15 +14,25 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-oauth2/oauth2/v4/generates"
+	"github.com/golang-jwt/jwt"
+
+	"gitlab.com/nova_dubai/common/model/invoke"
+
+	"github.com/gin-contrib/cors"
+
+	"github.com/gin-gonic/gin"
+
+	"gitlab.com/nova_dubai/common/twofactor"
+
 	"github.com/fsnotify/fsnotify"
-	"github.com/go-oauth2/oauth2/v4/errors"
+
+	oauth2err "github.com/go-oauth2/oauth2/v4/errors"
 	"github.com/go-oauth2/oauth2/v4/manage"
 	"github.com/go-oauth2/oauth2/v4/server"
 	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
 )
-
-var jsonContentType = []string{"application/json; charset=utf-8"}
 
 // MysqlConfig 数据库配置
 type MysqlConfig struct {
@@ -63,47 +73,69 @@ func main() {
 		}
 	}
 
+	engine := gin.New()
+	engine.Use(cors.New(cors.Config{
+		AllowAllOrigins:  true,
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+		AllowHeaders:     []string{"Content-Type"},
+		AllowCredentials: true,
+		AllowWildcard:    true,
+		MaxAge:           12 * time.Hour,
+	}))
+
 	data, err := NewData(mysqlConfig, 1)
 	if err != nil {
 		panic(err)
 	}
+
 	manager := manage.NewDefaultManager()
 	manager.MapTokenStorage(data)
 	manager.MapClientStorage(data)
+	manager.MapAccessGenerate(generates.NewJWTAccessGenerate("auth", []byte("auth_jwt"), jwt.SigningMethodHS256))
 
 	srv := server.NewDefaultServer(manager)
 	srv.SetAllowGetAccessRequest(true)
 	srv.SetClientInfoHandler(server.ClientFormHandler)
 	srv.SetUserAuthorizationHandler(userAuthorizeHandler)
 
-	srv.SetInternalErrorHandler(func(err error) (re *errors.Response) {
+	srv.SetInternalErrorHandler(func(err error) (re *oauth2err.Response) {
 		log.Println("Internal Error:", err.Error())
 		return
 	})
 
-	srv.SetResponseErrorHandler(func(re *errors.Response) {
+	srv.SetResponseErrorHandler(func(re *oauth2err.Response) {
 		log.Println("Response Error:", re.Error.Error())
 	})
 
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
-		if err := srv.HandleAuthorizeRequest(w, r); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+	engine.GET("/authorize", func(ctx *gin.Context) {
+		if err := srv.HandleAuthorizeRequest(ctx.Writer, ctx.Request); err != nil {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			return
 		}
 	})
 
-	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		if err := srv.HandleTokenRequest(w, r); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+	engine.POST("/token", func(ctx *gin.Context) {
+		if err := srv.HandleTokenRequest(ctx.Writer, ctx.Request); err != nil {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			return
 		}
 	})
 
-	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-
-		token, err := srv.ValidationBearerToken(r)
+	engine.POST("/list", func(ctx *gin.Context) {
+		infos, err := data.GetAllClient(ctx)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			return
+		}
+
+		invoke.ReturnSuccess(ctx, infos)
+	})
+
+	engine.POST("/info", func(ctx *gin.Context) {
+
+		token, err := srv.ValidationBearerToken(ctx.Request)
+		if err != nil {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
 			return
 		}
 
@@ -111,52 +143,99 @@ func main() {
 			UserID:       token.GetUserID(),
 			ExpireSecond: int64(token.GetAccessCreateAt().Add(token.GetAccessExpiresIn()).Sub(time.Now()).Seconds()),
 		}
-		header := w.Header()
-		if val := header["Content-Type"]; len(val) == 0 {
-			header["Content-Type"] = jsonContentType
-		}
 
-		marshal, err := json.Marshal(info)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Write(marshal)
-		return
+		invoke.ReturnSuccess(ctx, info)
 	})
 
-	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-
+	engine.POST("/qrCode", func(ctx *gin.Context) {
 		v := new(Users)
 
-		if r == nil || r.Body == nil {
-			http.Error(w, "invalid request", http.StatusBadRequest)
-		}
-
-		decoder := json.NewDecoder(r.Body)
-		decoder.UseNumber()
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(v); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		returned, err := invoke.ProcessArgument(ctx, v)
+		if returned {
 			return
 		}
 
-		if err := data.GetUser(r.Context(), v.Username, v.Password); err == nil {
-			if err := session.SaveUserSession(r, w, v.Username); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			http.Redirect(w, r, viper.GetString("http.host")+port+"/authorize?"+r.URL.RawQuery, http.StatusFound)
+		if err != nil {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
 			return
 		}
 
-		http.Error(w, "you dont have permission to access", http.StatusUnauthorized)
-		return
+		user, err := data.GetUser(ctx, v.Username, v.Password)
+		if err != nil {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			return
+		}
+
+		if !user.ShowGoogleQrcode {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, "未开启展示谷歌二维码")
+			return
+		}
+		auth, err := twofactor.NewAuth(user.GoogleAuth)
+		if err != nil {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			return
+		}
+
+		qrcode, _, err := auth.QR("auth")
+		if err != nil {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			return
+		}
+
+		invoke.ReturnSuccess(ctx, qrcode)
+
 	})
+
+	engine.POST("/login", func(ctx *gin.Context) {
+		v := new(Users)
+
+		returned, err := invoke.ProcessArgument(ctx, v)
+		if returned {
+			return
+		}
+
+		if err != nil {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			return
+		}
+
+		_, err = data.GetUser(ctx, v.Username, v.Password)
+		if err != nil {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			return
+		}
+
+		// todo  测试屏蔽谷歌验证码
+		//auth, err := twofactor.NewAuth(user.GoogleAuth)
+		//if err != nil {
+		//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+		//	return
+		//}
+		//
+		//ok, err := auth.Validate(v.GoogleCode)
+		//if err != nil {
+		//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+		//	return
+		//}
+		//
+		//if !ok {
+		//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, "谷歌验证码错误")
+		//	return
+		//}
+
+		if err := session.SaveUserSession(ctx.Request, ctx.Writer, v.Username); err != nil {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			return
+		}
+
+		http.Redirect(ctx.Writer, ctx.Request, viper.GetString("http.host")+port+"/authorize?"+ctx.Request.URL.RawQuery, http.StatusFound)
+		return
+
+	})
+
 	s := &http.Server{
 		Addr:    port,
-		Handler: mux,
+		Handler: engine,
 	}
 
 	// 创建系统信号接收器
@@ -181,13 +260,27 @@ func main() {
 }
 
 type Users struct {
-	Username string `gorm:"column:username;primaryKey;type:varchar(255)" json:"username"`
-	Password string `gorm:"column:password;type:varchar(255)" json:"password"`
+	Username         string `gorm:"column:username;primaryKey;type:varchar(255)" json:"username"`
+	Password         string `gorm:"column:password;type:varchar(255)" json:"password"`
+	GoogleAuth       string `gorm:"column:google_auth;type:varchar(255);comment:谷歌验证至少28位" json:"-"`
+	ShowGoogleQrcode bool   `gorm:"column:show_google_qrcode;type:varchar(255);comment:0不展示;1展示" json:"-"`
+	GoogleCode       string `gorm:"-" json:"google_code"`
+}
+
+func (u Users) Validate() error {
+	if u.Username == "" {
+		return errors.New("用户名不能为空")
+	}
+	if u.Password == "" {
+		return errors.New("密码不能为空")
+	}
+
+	return nil
 }
 
 func userAuthorizeHandler(w http.ResponseWriter, r *http.Request) (userID string, err error) {
 	if userID = session.GetUserSession(r); userID == "" {
-		w.Header().Set("Location", "/login?"+r.URL.RawQuery)
+		w.Header().Set("Location", "/web/login?"+r.URL.RawQuery)
 		w.WriteHeader(302)
 	}
 

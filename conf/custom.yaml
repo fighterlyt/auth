@@ -8,4 +8,4 @@ mysql: # mysql配置
   maxOpen: 300
   maxLife: 30m
 http:
-  port: 8001
+  port: 9001

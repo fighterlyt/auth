@@ -18,6 +18,7 @@ require (
 )
 
 require (
+	github.com/appleboy/gin-jwt/v2 v2.7.0 // indirect
 	github.com/boombuler/barcode v1.0.1 // indirect
 	github.com/btcsuite/btcd v0.20.1-beta // indirect
 	github.com/cespare/xxhash/v2 v2.1.1 // indirect
@@ -35,6 +36,7 @@ require (
 	github.com/go-redis/redis/v8 v8.11.3 // indirect
 	github.com/go-redsync/redsync/v4 v4.4.1 // indirect
 	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
+	github.com/golang-jwt/jwt/v4 v4.1.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/gorilla/securecookie v1.1.1 // indirect

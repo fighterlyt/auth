@@ -1,7 +1,6 @@
 package main
 
 import (
-	"auth/session"
 	"context"
 	"errors"
 	"fmt"
@@ -14,8 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-oauth2/oauth2/v4/generates"
-	"github.com/golang-jwt/jwt"
+	jwt "github.com/appleboy/gin-jwt/v2"
 
 	"gitlab.com/nova_dubai/common/model/invoke"
 
@@ -27,12 +25,15 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	oauth2err "github.com/go-oauth2/oauth2/v4/errors"
-	"github.com/go-oauth2/oauth2/v4/manage"
-	"github.com/go-oauth2/oauth2/v4/server"
 	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
 )
+
+const (
+	IdentityKey = "uid"
+)
+
+var ErrReturned = errors.New("已经写入响应")
 
 // MysqlConfig 数据库配置
 type MysqlConfig struct {
@@ -47,7 +48,6 @@ type MysqlConfig struct {
 }
 
 type HTTPConfig struct {
-	Host string `yaml:"host"` // 本机域名
 	Port string `yaml:"port"` // 端口
 }
 
@@ -83,68 +83,118 @@ func main() {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	data, err := NewData(mysqlConfig, 1)
+	data, err := NewData(mysqlConfig)
 	if err != nil {
 		panic(err)
 	}
 
-	manager := manage.NewDefaultManager()
-	manager.MapTokenStorage(data)
-	manager.MapClientStorage(data)
-	manager.MapAccessGenerate(generates.NewJWTAccessGenerate("auth", []byte("auth_jwt"), jwt.SigningMethodHS256))
+	mw, err := jwt.New(&jwt.GinJWTMiddleware{
+		Realm:   "auth",
+		Key:     []byte("auth_jwt"),
+		Timeout: time.Hour * 24,
+		Authenticator: func(ctx *gin.Context) (interface{}, error) {
+			v := new(Users)
 
-	srv := server.NewDefaultServer(manager)
-	srv.SetAllowGetAccessRequest(true)
-	srv.SetClientInfoHandler(server.ClientFormHandler)
-	srv.SetUserAuthorizationHandler(userAuthorizeHandler)
+			returned, err := invoke.ProcessArgument(ctx, v)
+			if returned {
+				return nil, ErrReturned
+			}
 
-	srv.SetInternalErrorHandler(func(err error) (re *oauth2err.Response) {
-		log.Println("Internal Error:", err.Error())
-		return
-	})
+			if err != nil {
+				return nil, err
+			}
 
-	srv.SetResponseErrorHandler(func(re *oauth2err.Response) {
-		log.Println("Response Error:", re.Error.Error())
-	})
+			user, err := data.GetUser(ctx, v.Username, v.Password)
+			if err != nil {
+				return nil, err
+			}
 
-	engine.GET("/authorize", func(ctx *gin.Context) {
-		if err := srv.HandleAuthorizeRequest(ctx.Writer, ctx.Request); err != nil {
-			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			// todo  测试屏蔽谷歌验证码
+			//auth, err := twofactor.NewAuth(user.GoogleAuth)
+			//if err != nil {
+			//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			//	return
+			//}
+			//
+			//ok, err := auth.Validate(v.GoogleCode)
+			//if err != nil {
+			//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+			//	return
+			//}
+			//
+			//if !ok {
+			//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, "谷歌验证码错误")
+			//	return
+			//}
+			return &Info{
+				UserID: user.Username,
+			}, nil
+		},
+		Authorizator: func(data interface{}, ctx *gin.Context) bool {
+			if info, ok := data.(*Info); ok {
+				return info.UserID != ""
+			}
+
+			return false
+		},
+		PayloadFunc: func(data interface{}) jwt.MapClaims {
+			if v, ok := data.(*Info); ok {
+				return jwt.MapClaims{
+					IdentityKey: v.UserID,
+				}
+			}
+			return nil
+		},
+		Unauthorized: func(ctx *gin.Context, code int, message string) {
+			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, message)
 			return
-		}
+		},
+		LoginResponse: func(ctx *gin.Context, code int, token string, expire time.Time) {
+			infos, err := data.GetAllClient(ctx)
+			if err != nil {
+				invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+				return
+			}
+			invoke.ReturnSuccess(ctx, gin.H{
+				"infos":  infos,
+				"expire": expire,
+				"token":  token,
+			})
+		},
+		LogoutResponse:  nil,
+		RefreshResponse: nil,
+		IdentityHandler: func(ctx *gin.Context) interface{} {
+			claims := jwt.ExtractClaims(ctx)
+			id := claims[IdentityKey].(string)
+			return &Info{id}
+		},
+		IdentityKey: IdentityKey,
 	})
+	if err != nil {
+		panic(err)
+	}
 
-	engine.POST("/token", func(ctx *gin.Context) {
-		if err := srv.HandleTokenRequest(ctx.Writer, ctx.Request); err != nil {
-			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
-			return
-		}
-	})
-
-	engine.POST("/list", func(ctx *gin.Context) {
-		infos, err := data.GetAllClient(ctx)
-		if err != nil {
-			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
-			return
-		}
-
-		invoke.ReturnSuccess(ctx, infos)
-	})
+	engine.POST("/login", mw.LoginHandler)
+	engine.Use(mw.MiddlewareFunc())
 
 	engine.POST("/info", func(ctx *gin.Context) {
 
-		token, err := srv.ValidationBearerToken(ctx.Request)
-		if err != nil {
-			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
+		userInfo, exist := ctx.Get(IdentityKey)
+		if !exist {
+			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "")
 			return
 		}
 
-		info := Info{
-			UserID:       token.GetUserID(),
-			ExpireSecond: int64(token.GetAccessCreateAt().Add(token.GetAccessExpiresIn()).Sub(time.Now()).Seconds()),
+		info, ok := userInfo.(*Info)
+		if !ok {
+			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "")
+			return
 		}
 
-		invoke.ReturnSuccess(ctx, info)
+		invoke.ReturnSuccess(ctx, Info{
+			UserID: info.UserID,
+		})
+
 	})
 
 	engine.POST("/qrCode", func(ctx *gin.Context) {
@@ -183,53 +233,6 @@ func main() {
 		}
 
 		invoke.ReturnSuccess(ctx, qrcode)
-
-	})
-
-	engine.POST("/login", func(ctx *gin.Context) {
-		v := new(Users)
-
-		returned, err := invoke.ProcessArgument(ctx, v)
-		if returned {
-			return
-		}
-
-		if err != nil {
-			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
-			return
-		}
-
-		_, err = data.GetUser(ctx, v.Username, v.Password)
-		if err != nil {
-			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
-			return
-		}
-
-		// todo  测试屏蔽谷歌验证码
-		//auth, err := twofactor.NewAuth(user.GoogleAuth)
-		//if err != nil {
-		//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
-		//	return
-		//}
-		//
-		//ok, err := auth.Validate(v.GoogleCode)
-		//if err != nil {
-		//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
-		//	return
-		//}
-		//
-		//if !ok {
-		//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, "谷歌验证码错误")
-		//	return
-		//}
-
-		if err := session.SaveUserSession(ctx.Request, ctx.Writer, v.Username); err != nil {
-			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
-			return
-		}
-
-		http.Redirect(ctx.Writer, ctx.Request, viper.GetString("http.host")+port+"/authorize?"+ctx.Request.URL.RawQuery, http.StatusFound)
-		return
 
 	})
 
@@ -278,15 +281,6 @@ func (u Users) Validate() error {
 	return nil
 }
 
-func userAuthorizeHandler(w http.ResponseWriter, r *http.Request) (userID string, err error) {
-	if userID = session.GetUserSession(r); userID == "" {
-		w.Header().Set("Location", "/web/login?"+r.URL.RawQuery)
-		w.WriteHeader(302)
-	}
-
-	return
-}
-
 // Init init config
 func Init(confPath string, prefix string) error {
 	err := initConfig(confPath, prefix)
@@ -330,6 +324,5 @@ func watchConfig() {
 }
 
 type Info struct {
-	UserID       string `json:"user_id"`
-	ExpireSecond int64  `json:"expire_second"`
+	UserID string `json:"user_id"`
 }

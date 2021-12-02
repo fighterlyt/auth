@@ -9,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/go-oauth2/oauth2/v4"
 	_ "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -24,27 +23,12 @@ type Data struct {
 }
 
 type Client struct {
-	ID     string `gorm:"column:id;type:varchar(255)" json:"id"`
-	Secret string `gorm:"column:secret;type:varchar(255)" json:"secret"`
 	Domain string `gorm:"column:domain;type:varchar(255)" json:"domain"`
 	Remark string `gorm:"column:remark;type:varchar(255)" json:"remark"`
-	UserID string
-}
-
-func (c *Client) GetID() string {
-	return c.ID
-}
-
-func (c *Client) GetSecret() string {
-	return c.Secret
 }
 
 func (c *Client) GetDomain() string {
 	return c.Domain
-}
-
-func (c *Client) GetUserID() string {
-	return c.UserID
 }
 
 func (d *Data) UpdateToken(ctx context.Context, username string, token string) error {
@@ -99,18 +83,6 @@ func (d *Data) GetAllClient(ctx context.Context) ([]*ClientInfo, error) {
 	}
 
 	return infos, nil
-}
-
-func (d *Data) GetByID(ctx context.Context, id string) (oauth2.ClientInfo, error) {
-	client := &Client{}
-	if err := d.db.Table(d.clientTableName).Where("id = ?", id).First(client).Error; err != nil {
-		return nil, err
-	}
-	return client, nil
-}
-
-func (d *Data) Endpoint() (string, error) {
-	return "", nil
 }
 
 // NewData .

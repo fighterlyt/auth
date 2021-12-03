@@ -261,6 +261,8 @@ func main() {
 				clientIP = strings.TrimSpace(ips[0])
 			}
 
+			log.Println("来自业务方", clientIP)
+
 			for _, client := range user.Clients {
 				if client.IP == clientIP {
 					invoke.ReturnSuccess(ctx, Info{

@@ -18,13 +18,19 @@ import (
 // Data .
 type Data struct {
 	clientTableName string
-	usersTableName  string
 	db              *gorm.DB
 }
 
 type Client struct {
-	Domain string `gorm:"column:domain;type:varchar(255)" json:"domain"`
-	Remark string `gorm:"column:remark;type:varchar(255)" json:"remark"`
+	ID       int64  `gorm:"column:id;primaryKey;type:bigint(20);comment:记录id" json:"id"`
+	Username string `gorm:"column:username;type:varchar(255)" json:"username"`
+	Domain   string `gorm:"column:domain;type:varchar(255)" json:"domain"`
+	Remark   string `gorm:"column:remark;type:varchar(255)" json:"remark"`
+	IP       string `gorm:"column:ip;type:varchar(32);comment:ip" json:"ip"`
+}
+
+func (c *Client) TableName() string {
+	return "oauth2_client"
 }
 
 func (c *Client) GetDomain() string {
@@ -33,7 +39,7 @@ func (c *Client) GetDomain() string {
 
 func (d *Data) UpdateToken(ctx context.Context, username string, token string) error {
 
-	updates := d.db.Table(d.usersTableName).Where("username = ?", username).Updates(map[string]interface{}{
+	updates := d.db.Model(&Users{}).Where("username = ?", username).Updates(map[string]interface{}{
 		"token": token,
 	})
 	if err := updates.Error; err != nil {
@@ -51,7 +57,7 @@ func (d *Data) UpdateToken(ctx context.Context, username string, token string) e
 func (d *Data) GetUserByUsername(ctx context.Context, username string) (user *Users, err error) {
 	user = &Users{}
 
-	if err := d.db.Table(d.usersTableName).Where("username = ?", username).First(user).Error; err != nil {
+	if err := d.db.Model(&Users{}).Preload("Clients").Where("username = ?", username).First(user).Error; err != nil {
 		return nil, err
 	}
 
@@ -62,7 +68,7 @@ func (d *Data) GetUserByUsername(ctx context.Context, username string) (user *Us
 func (d *Data) GetUser(ctx context.Context, username string, password string) (user *Users, err error) {
 	user = &Users{}
 
-	if err := d.db.Table(d.usersTableName).Where("username = ? and password = ?", username, password).First(user).Error; err != nil {
+	if err := d.db.Model(&Users{}).Where("username = ? and password = ?", username, password).First(user).Error; err != nil {
 		return nil, err
 	}
 
@@ -75,10 +81,10 @@ type ClientInfo struct {
 	Remark string `gorm:"column:remark;type:varchar(255)" json:"remark"`
 }
 
-func (d *Data) GetAllClient(ctx context.Context) ([]*ClientInfo, error) {
+func (d *Data) GetClients(ctx context.Context, username string) ([]*ClientInfo, error) {
 	var infos []*ClientInfo
 
-	if err := d.db.Table(d.clientTableName).Select("domain", "remark").Find(&infos).Error; err != nil {
+	if err := d.db.Model(&Client{}).Select("domain", "remark").Where("username = ?", username).Find(&infos).Error; err != nil {
 		return nil, err
 	}
 
@@ -123,21 +129,11 @@ func NewData(conf *MysqlConfig) (*Data, error) {
 func NewStoreWithDB(db *gorm.DB) *Data {
 	// https://github.com/techknowlogick/go-oauth2-gorm
 	store := &Data{
-		clientTableName: "oauth2_client",
-		usersTableName:  "oauth2_users",
-		db:              db,
+		db: db,
 	}
 
-	if !db.Migrator().HasTable(store.usersTableName) {
-		if err := db.Table(store.usersTableName).Migrator().CreateTable(&Users{}); err != nil {
-			panic(err)
-		}
-	}
-
-	if !db.Migrator().HasTable(store.clientTableName) {
-		if err := db.Table(store.clientTableName).Migrator().CreateTable(&Client{}); err != nil {
-			panic(err)
-		}
+	if err := db.AutoMigrate(&Users{}, &Client{}); err != nil {
+		panic(err)
 	}
 
 	return store

@@ -115,7 +115,6 @@ func main() {
 			auth, err := twofactor.NewAuth(user.GoogleAuth)
 			if err != nil {
 				return nil, err
-
 			}
 
 			ok, err := auth.Validate(v.GoogleCode)
@@ -149,18 +148,6 @@ func main() {
 		Unauthorized: func(ctx *gin.Context, code int, message string) {
 			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, message)
 			return
-		},
-		LoginResponse: func(ctx *gin.Context, code int, token string, expire time.Time) {
-			infos, err := data.GetAllClient(ctx)
-			if err != nil {
-				invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
-				return
-			}
-			invoke.ReturnSuccess(ctx, gin.H{
-				"infos":  infos,
-				"expire": expire,
-				"token":  token,
-			})
 		},
 		LogoutResponse:  nil,
 		RefreshResponse: nil,
@@ -216,6 +203,29 @@ func main() {
 
 	})
 
+	mw.LoginResponse = func(ctx *gin.Context, code int, token string, expire time.Time) {
+		userID, err := ParseToken(mw, token)
+		if err == nil {
+			clients, err := data.GetClients(ctx, userID)
+			if err == nil {
+				invoke.ReturnSuccess(ctx, gin.H{
+					"infos":  clients,
+					"expire": expire,
+					"token":  token,
+				})
+				return
+			}
+
+		}
+
+		invoke.ReturnSuccess(ctx, gin.H{
+			"infos":  make([]interface{}, 0),
+			"expire": expire,
+			"token":  token,
+		})
+
+	}
+
 	engine.Use(mw.MiddlewareFunc())
 
 	engine.POST("/info", func(ctx *gin.Context) {
@@ -230,6 +240,42 @@ func main() {
 		if !ok {
 			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "")
 			return
+		}
+
+		user, err := data.GetUserByUsername(ctx, info.UserID)
+		if err != nil {
+			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "")
+			return
+		}
+
+		if !user.IsAdmin {
+			if user.Clients == nil {
+				invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "该用户没有绑定业务方")
+				return
+			}
+
+			clientIP := ctx.ClientIP()
+			// 域名加速
+			if forwardIP := ctx.Request.Header.Get(`X-Forwarded-For`); forwardIP != `` {
+				ips := strings.Split(forwardIP, `,`)
+				clientIP = strings.TrimSpace(ips[0])
+			}
+
+			log.Println("来自业务方", clientIP)
+
+			for _, client := range user.Clients {
+				if client.IP == clientIP {
+					invoke.ReturnSuccess(ctx, Info{
+						UserID: info.UserID,
+					})
+					return
+
+				}
+			}
+
+			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, fmt.Sprintf("该用户未匹配业务方"))
+			return
+
 		}
 
 		invoke.ReturnSuccess(ctx, Info{
@@ -265,11 +311,34 @@ func main() {
 }
 
 type Users struct {
-	Username         string `gorm:"column:username;primaryKey;type:varchar(255)" json:"username"`
-	Password         string `gorm:"column:password;type:varchar(255)" json:"password"`
-	GoogleAuth       string `gorm:"column:google_auth;type:varchar(255);comment:谷歌验证至少28位" json:"-"`
-	ShowGoogleQrcode bool   `gorm:"column:show_google_qrcode;type:varchar(255);comment:0不展示;1展示" json:"-"`
-	GoogleCode       string `gorm:"-" json:"google_code"`
+	Username         string    `gorm:"column:username;primaryKey;type:varchar(255)" json:"username"`
+	Password         string    `gorm:"column:password;type:varchar(255)" json:"password"`
+	GoogleAuth       string    `gorm:"column:google_auth;type:varchar(255);comment:谷歌验证至少28位" json:"-"`
+	ShowGoogleQrcode bool      `gorm:"column:show_google_qrcode;type:varchar(255);comment:0不展示;1展示" json:"-"`
+	Clients          []*Client `gorm:"foreignKey:username;references:username" json:"-"`
+	IsAdmin          bool      `gorm:"column:is_admin;type:tinyint;default:0;comment:是否为管理员" json:"is_admin"`
+	GoogleCode       string    `gorm:"-" json:"google_code"`
+}
+
+func ParseToken(mw *jwt.GinJWTMiddleware, tokenStr string) (userID string, err error) {
+	token, err := mw.ParseTokenString(tokenStr)
+	if err != nil {
+		return "", err
+	}
+
+	claims := jwt.ExtractClaimsFromToken(token)
+
+	userID, ok := claims[IdentityKey].(string)
+	if !ok {
+
+		return "", errors.New("未找到用户ID")
+	}
+
+	return userID, nil
+}
+
+func (u Users) TableName() string {
+	return "oauth2_users"
 }
 
 func (u Users) Validate() error {

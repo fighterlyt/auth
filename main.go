@@ -112,23 +112,21 @@ func main() {
 				return nil, err
 			}
 
-			// todo  测试屏蔽谷歌验证码
-			//auth, err := twofactor.NewAuth(user.GoogleAuth)
-			//if err != nil {
-			//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
-			//	return
-			//}
-			//
-			//ok, err := auth.Validate(v.GoogleCode)
-			//if err != nil {
-			//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, err.Error())
-			//	return
-			//}
-			//
-			//if !ok {
-			//	invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, "谷歌验证码错误")
-			//	return
-			//}
+			auth, err := twofactor.NewAuth(user.GoogleAuth)
+			if err != nil {
+				return nil, err
+
+			}
+
+			ok, err := auth.Validate(v.GoogleCode)
+			if err != nil {
+				return nil, err
+			}
+
+			if !ok {
+				return nil, errors.New("谷歌验证码错误")
+			}
+
 			return &Info{
 				UserID: user.Username,
 			}, nil
@@ -178,27 +176,6 @@ func main() {
 	}
 
 	engine.POST("/login", mw.LoginHandler)
-	engine.Use(mw.MiddlewareFunc())
-
-	engine.POST("/info", func(ctx *gin.Context) {
-
-		userInfo, exist := ctx.Get(IdentityKey)
-		if !exist {
-			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "")
-			return
-		}
-
-		info, ok := userInfo.(*Info)
-		if !ok {
-			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "")
-			return
-		}
-
-		invoke.ReturnSuccess(ctx, Info{
-			UserID: info.UserID,
-		})
-
-	})
 
 	engine.POST("/qrCode", func(ctx *gin.Context) {
 		v := new(Users)
@@ -236,6 +213,28 @@ func main() {
 		}
 
 		invoke.ReturnSuccess(ctx, qrcode)
+
+	})
+
+	engine.Use(mw.MiddlewareFunc())
+
+	engine.POST("/info", func(ctx *gin.Context) {
+
+		userInfo, exist := ctx.Get(IdentityKey)
+		if !exist {
+			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "")
+			return
+		}
+
+		info, ok := userInfo.(*Info)
+		if !ok {
+			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "")
+			return
+		}
+
+		invoke.ReturnSuccess(ctx, Info{
+			UserID: info.UserID,
+		})
 
 	})
 

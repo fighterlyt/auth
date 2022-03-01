@@ -32,6 +32,7 @@ import (
 
 const (
 	IdentityKey = "uid"
+	timeout     = time.Hour * 24
 )
 
 var ErrReturned = errors.New("已经写入响应")
@@ -58,7 +59,8 @@ func main() {
 	}
 
 	mysqlConfig := new(MysqlConfig)
-	if err := viper.UnmarshalKey("mysql", mysqlConfig, viper.DecodeHook(mapstructure.StringToTimeDurationHookFunc())); err != nil {
+
+	if err := viper.UnmarshalKey("mysql", mysqlConfig, viper.DecodeHook(mapstructure.StringToTimeDurationHookFunc())); err != nil { //nolint:lll
 		panic(err)
 	}
 
@@ -84,7 +86,7 @@ func main() {
 		AllowOriginFunc: func(origin string) bool {
 			return true
 		},
-		MaxAge: 12 * time.Hour,
+		MaxAge: timeout,
 	}))
 
 	data, err := NewData(mysqlConfig)
@@ -95,7 +97,7 @@ func main() {
 	mw, err := jwt.New(&jwt.GinJWTMiddleware{
 		Realm:   "auth",
 		Key:     []byte("auth_jwt"),
-		Timeout: time.Hour * 24,
+		Timeout: timeout,
 		Authenticator: func(ctx *gin.Context) (interface{}, error) {
 			v := new(Users)
 
@@ -148,14 +150,14 @@ func main() {
 		},
 		Unauthorized: func(ctx *gin.Context, code int, message string) {
 			invoke.ReturnFail(ctx, invoke.Fail, invoke.ErrFail, message)
-			return
 		},
 		LogoutResponse:  nil,
 		RefreshResponse: nil,
 		IdentityHandler: func(ctx *gin.Context) interface{} {
 			claims := jwt.ExtractClaims(ctx)
 			id := claims[IdentityKey].(string)
-			return &model.Info{id}
+
+			return &model.Info{UserID: id}
 		},
 		IdentityKey: IdentityKey,
 	})
@@ -201,7 +203,6 @@ func main() {
 		}
 
 		invoke.ReturnSuccess(ctx, qrcode)
-
 	})
 
 	mw.LoginResponse = func(ctx *gin.Context, code int, token string, expire time.Time) {
@@ -214,9 +215,9 @@ func main() {
 					"expire": expire,
 					"token":  token,
 				})
+
 				return
 			}
-
 		}
 
 		invoke.ReturnSuccess(ctx, gin.H{
@@ -224,13 +225,46 @@ func main() {
 			"expire": expire,
 			"token":  token,
 		})
-
 	}
 
 	engine.Use(mw.MiddlewareFunc())
 
-	engine.POST("/info", func(ctx *gin.Context) {
+	engine.POST("/info", httpInfo(data))
 
+	s := &http.Server{
+		Addr:    port,
+		Handler: engine,
+	}
+
+	shutdown(s)
+
+	log.Printf("已启动 监听地址:%s", s.Addr)
+	err = s.ListenAndServe()
+
+	if err != nil {
+		if err == http.ErrServerClosed {
+			log.Print("应用已经退出了")
+		} else {
+			log.Fatal("服务器以外关闭")
+		}
+	}
+}
+
+func shutdown(s *http.Server) {
+	// 创建系统信号接收器
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-done
+
+		if err := s.Shutdown(context.Background()); err != nil {
+			log.Fatal("优雅关闭失败", err)
+		}
+	}()
+}
+func httpInfo(data *Data) func(ctx *gin.Context) {
+	return func(ctx *gin.Context) {
 		userInfo, exist := ctx.Get(IdentityKey)
 		if !exist {
 			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "")
@@ -266,49 +300,25 @@ func main() {
 
 			for _, client := range user.Clients {
 				if client.IP == clientIP {
-					invoke.ReturnSuccess(ctx, model.Info{
-						UserID: info.UserID,
+					invoke.ReturnSuccess(ctx, model.InfoResult{
+						UserID:  info.UserID,
+						IsAdmin: user.IsAdmin,
 					})
-					return
 
+					return
 				}
 			}
 
-			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, fmt.Sprintf("该用户未匹配业务方"))
+			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, `该用户未匹配业务方`)
+
 			return
-
 		}
 
-		invoke.ReturnSuccess(ctx, model.Info{
-			UserID: info.UserID,
+		invoke.ReturnSuccess(ctx, model.InfoResult{
+			UserID:  info.UserID,
+			IsAdmin: user.IsAdmin,
 		})
-
-	})
-
-	s := &http.Server{
-		Addr:    port,
-		Handler: engine,
 	}
-
-	// 创建系统信号接收器
-	done := make(chan os.Signal)
-	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-done
-		if err := s.Shutdown(context.Background()); err != nil {
-			log.Fatal("优雅关闭失败", err)
-		}
-	}()
-	log.Printf("已启动 监听地址:%s", s.Addr)
-	err = s.ListenAndServe()
-	if err != nil {
-		if err == http.ErrServerClosed {
-			log.Print("应用已经退出了")
-		} else {
-			log.Fatal("服务器以外关闭")
-		}
-	}
-
 }
 
 type Users struct {
@@ -330,8 +340,8 @@ func ParseToken(mw *jwt.GinJWTMiddleware, tokenStr string) (userID string, err e
 	claims := jwt.ExtractClaimsFromToken(token)
 
 	userID, ok := claims[IdentityKey].(string)
-	if !ok {
 
+	if !ok {
 		return "", errors.New("未找到用户ID")
 	}
 
@@ -346,6 +356,7 @@ func (u Users) Validate() error {
 	if u.Username == "" {
 		return errors.New("用户名不能为空")
 	}
+
 	if u.Password == "" {
 		return errors.New("密码不能为空")
 	}
@@ -359,6 +370,7 @@ func Init(confPath string, prefix string) error {
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -370,18 +382,24 @@ func initConfig(confPath string, prefix string) error {
 		viper.AddConfigPath("conf") // 如果没有指定配置文件，则解析默认的配置文件
 		viper.SetConfigName("custom")
 	}
+
 	viper.SetConfigType("yaml") // 设置配置文件格式为YAML
 	viper.AutomaticEnv()        // 读取匹配的环境变量
 	viper.SetEnvPrefix(prefix)  // 读取环境变量的前缀
+
 	replacer := strings.NewReplacer(".", "_")
+
 	viper.SetEnvKeyReplacer(replacer)
+
 	if err := viper.ReadInConfig(); err != nil { // viper解析配置文件
 		return fmt.Errorf("err: %+v,stack: %s", err, debug.Stack())
 	}
 	watchConfig()
+
 	if viper.GetString("deploy.env") == "uat" {
-		os.Setenv("DEPLOY_ENV", "uat")
+		_ = os.Setenv("DEPLOY_ENV", "uat")
 	}
+
 	log.Printf("%s 启动, 部署环境: %s", prefix, os.Getenv("DEPLOY_ENV"))
 
 	return nil

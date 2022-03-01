@@ -1,24 +1,21 @@
-module auth
+module gitlab.com/nova_dubai/auth
 
 go 1.17
 
 require (
+	github.com/appleboy/gin-jwt/v2 v2.7.0
 	github.com/fsnotify/fsnotify v1.5.1
 	github.com/gin-contrib/cors v1.3.1
 	github.com/gin-gonic/gin v1.7.7
-	github.com/go-oauth2/oauth2/v4 v4.4.2
 	github.com/go-sql-driver/mysql v1.6.0
-	github.com/gorilla/sessions v1.2.1
 	github.com/mitchellh/mapstructure v1.4.2
 	github.com/spf13/viper v1.9.0
 	gitlab.com/nova_dubai/common v0.0.0-20211122150334-4d6a69d227dc
-	golang.org/x/oauth2 v0.0.0-20211104180415-d3ed0bb246c8
 	gorm.io/driver/mysql v1.2.1
 	gorm.io/gorm v1.22.4
 )
 
 require (
-	github.com/appleboy/gin-jwt/v2 v2.7.0 // indirect
 	github.com/boombuler/barcode v1.0.1 // indirect
 	github.com/btcsuite/btcd v0.20.1-beta // indirect
 	github.com/cespare/xxhash/v2 v2.1.1 // indirect
@@ -35,11 +32,8 @@ require (
 	github.com/go-playground/validator/v10 v10.9.0 // indirect
 	github.com/go-redis/redis/v8 v8.11.3 // indirect
 	github.com/go-redsync/redsync/v4 v4.4.1 // indirect
-	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
 	github.com/golang-jwt/jwt/v4 v4.1.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
-	github.com/google/uuid v1.3.0 // indirect
-	github.com/gorilla/securecookie v1.1.1 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
@@ -64,8 +58,6 @@ require (
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/subosito/gotenv v1.2.0 // indirect
-	github.com/tidwall/btree v0.7.1 // indirect
-	github.com/tidwall/buntdb v1.2.7 // indirect
 	github.com/tidwall/gjson v1.12.1 // indirect
 	github.com/ugorji/go/codec v1.2.6 // indirect
 	github.com/vmihailenco/msgpack v4.0.4+incompatible // indirect

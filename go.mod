@@ -11,8 +11,8 @@ require (
 	github.com/mitchellh/mapstructure v1.4.3
 	github.com/spf13/viper v1.10.1
 	gitlab.com/nova_dubai/common v0.0.0-20220218182742-c75b9aef6632
-	gorm.io/driver/mysql v1.3.2
-	gorm.io/gorm v1.23.1
+	gorm.io/driver/mysql v1.3.0
+	gorm.io/gorm v1.22.5
 )
 
 require (

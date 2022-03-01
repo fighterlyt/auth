@@ -14,6 +14,7 @@ import (
 	"time"
 
 	jwt "github.com/appleboy/gin-jwt/v2"
+	"gitlab.com/nova_dubai/auth/model"
 
 	"gitlab.com/nova_dubai/common/model/invoke"
 
@@ -126,19 +127,19 @@ func main() {
 				return nil, errors.New("谷歌验证码错误")
 			}
 
-			return &Info{
+			return &model.Info{
 				UserID: user.Username,
 			}, nil
 		},
 		Authorizator: func(data interface{}, ctx *gin.Context) bool {
-			if info, ok := data.(*Info); ok {
+			if info, ok := data.(*model.Info); ok {
 				return info.UserID != ""
 			}
 
 			return false
 		},
 		PayloadFunc: func(data interface{}) jwt.MapClaims {
-			if v, ok := data.(*Info); ok {
+			if v, ok := data.(*model.Info); ok {
 				return jwt.MapClaims{
 					IdentityKey: v.UserID,
 				}
@@ -154,7 +155,7 @@ func main() {
 		IdentityHandler: func(ctx *gin.Context) interface{} {
 			claims := jwt.ExtractClaims(ctx)
 			id := claims[IdentityKey].(string)
-			return &Info{id}
+			return &model.Info{id}
 		},
 		IdentityKey: IdentityKey,
 	})
@@ -236,7 +237,7 @@ func main() {
 			return
 		}
 
-		info, ok := userInfo.(*Info)
+		info, ok := userInfo.(*model.Info)
 		if !ok {
 			invoke.ReturnFail(ctx, invoke.Unauthorized, invoke.ErrFail, "")
 			return
@@ -265,7 +266,7 @@ func main() {
 
 			for _, client := range user.Clients {
 				if client.IP == clientIP {
-					invoke.ReturnSuccess(ctx, Info{
+					invoke.ReturnSuccess(ctx, model.Info{
 						UserID: info.UserID,
 					})
 					return
@@ -278,7 +279,7 @@ func main() {
 
 		}
 
-		invoke.ReturnSuccess(ctx, Info{
+		invoke.ReturnSuccess(ctx, model.Info{
 			UserID: info.UserID,
 		})
 
@@ -392,8 +393,4 @@ func watchConfig() {
 	viper.OnConfigChange(func(e fsnotify.Event) {
 		log.Printf("Config file changed: %s", e.Name)
 	})
-}
-
-type Info struct {
-	UserID string `json:"user_id"`
 }

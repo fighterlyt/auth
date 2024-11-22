@@ -14,15 +14,15 @@ import (
 	"time"
 
 	jwt "github.com/appleboy/gin-jwt/v2"
-	"gitlab.com/nova_dubai/auth/model"
+	"github.com/fighterlyt/auth/model"
 
-	"gitlab.com/nova_dubai/common/model/invoke"
+	"github.com/fighterlyt/common/model/invoke"
 
 	"github.com/gin-contrib/cors"
 
 	"github.com/gin-gonic/gin"
 
-	"gitlab.com/nova_dubai/common/twofactor"
+	"github.com/fighterlyt/common/twofactor"
 
 	"github.com/fsnotify/fsnotify"
 
